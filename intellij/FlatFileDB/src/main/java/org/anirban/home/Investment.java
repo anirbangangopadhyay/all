@@ -81,7 +81,7 @@ public class Investment {
         return interestDates;
     }
 
-    protected List<Calendar> calculateHalfYearlyInterestDates(Account account) { // TODO
+    protected List<Calendar> calculateHalfYearlyInterestDates(Account account) {
         List<Calendar> interestDates = new ArrayList<>();
         Calendar startDate = createCalendar(account.getStartDate());
         Calendar endDate = createCalendar(account.getEndDate());
