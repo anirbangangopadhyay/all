@@ -5,10 +5,13 @@ import org.anirban.home.dto.Person;
 import org.anirban.home.duckdb.DuckDBCSVUtil;
 import org.anirban.home.duckdb.embedded.DuckDBEmbeddedUtil;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 public class Investment {
@@ -23,32 +26,43 @@ public class Investment {
         try {
             Map<String, Person> personData = INVESTMENT.getPersonData();
             Map<String, Account> accountData = INVESTMENT.getAccountData(personData);
-            List<Calendar> calendars = INVESTMENT.calculateHalfYearlyInterestDates(accountData.values().iterator().next());
-            for (Calendar calendar : calendars) {
-                System.out.println(calendar.toInstant());
+            Map<Calendar, BigDecimal> interests = INVESTMENT.calculateMonthlyInterestDates(accountData.values().iterator().next());
+            for (Map.Entry<Calendar, BigDecimal> entry : interests.entrySet()) {
+                System.out.println(entry.getKey().toInstant() + " = " + entry.getValue());
             }
         } finally {
             DuckDBEmbeddedUtil.closeConnection();
         }
     }
 
-    protected List<Calendar> calculateYearlyInterestDates(Account account) {
-        List<Calendar> interestDates = new ArrayList<>();
+    protected Map<Calendar, BigDecimal> calculateInterests(Account account) {
+        return switch (account.getMode()) {
+            case YEARLY -> calculateYearlyInterests(account);
+            case HALF_YEARLY -> calculateHalfYearlyInterestDates(account);
+            case QUARTERLY -> calculateQuarterlyInterestDates(account);
+            case MONTHLY -> calculateMonthlyInterestDates(account);
+        };
+    }
+
+    protected Map<Calendar, BigDecimal> calculateYearlyInterests(Account account) {
+        LinkedHashMap<Calendar, BigDecimal> interests = new LinkedHashMap<>();
         Calendar startDate = createCalendar(account.getStartDate());
         Calendar endDate = createCalendar(account.getEndDate());
         Calendar interestDate = (Calendar) startDate.clone();
         while (interestDate.before(endDate)) {
             interestDate.add(Calendar.YEAR, 1);
             if(interestDate.before(endDate)) {
-                interestDates.add((Calendar) interestDate.clone());
+                interests.put((Calendar) interestDate.clone(), account.getInterestAmount());
             }
         }
-        interestDates.add((Calendar) endDate.clone());
-        return interestDates;
+        Map.Entry<Calendar, BigDecimal> lastEntry = getLastEntry(interests);
+        long between = ChronoUnit.DAYS.between(lastEntry.getKey().toInstant(), endDate.toInstant());
+        interests.put((Calendar) endDate.clone(), account.getInterestAmount().divide(new BigDecimal(endDate.getActualMaximum(Calendar.DAY_OF_YEAR)), 2, RoundingMode.HALF_UP).multiply(new BigDecimal(between)));
+        return interests;
     }
 
-    protected List<Calendar> calculateMonthlyInterestDates(Account account) {
-        List<Calendar> interestDates = new ArrayList<>();
+    protected Map<Calendar, BigDecimal> calculateMonthlyInterestDates(Account account) {
+        LinkedHashMap<Calendar, BigDecimal> interests = new LinkedHashMap<>();
         Calendar startDate = createCalendar(account.getStartDate());
         Calendar endDate = createCalendar(account.getEndDate());
         Calendar interestDate = (Calendar) startDate.clone();
@@ -56,15 +70,23 @@ public class Investment {
             interestDate.add(Calendar.MONTH, 1);
             interestDate.set(Calendar.DAY_OF_MONTH, 1);
             if(interestDate.before(endDate)) {
-                interestDates.add((Calendar) interestDate.clone());
+                if(interests.size() == 0) {
+                    long between = ChronoUnit.DAYS.between(startDate.toInstant(), interestDate.toInstant());
+                    interests.put((Calendar) interestDate.clone(), account.getInterestAmount().divide(new BigDecimal(startDate.getActualMaximum(Calendar.DAY_OF_MONTH)), 2, RoundingMode.HALF_UP).multiply(new BigDecimal(between)));
+                } else {
+                    interests.put((Calendar) interestDate.clone(), account.getInterestAmount());
+                }
             }
         }
-        interestDates.add((Calendar) endDate.clone());
-        return interestDates;
+
+        Map.Entry<Calendar, BigDecimal> lastEntry = getLastEntry(interests);
+        long between = ChronoUnit.DAYS.between(lastEntry.getKey().toInstant(), endDate.toInstant());
+        interests.put((Calendar) endDate.clone(), account.getInterestAmount().divide(new BigDecimal(endDate.getActualMaximum(Calendar.DAY_OF_MONTH)), 2, RoundingMode.HALF_UP).multiply(new BigDecimal(between)));
+        return interests;
     }
 
-    protected List<Calendar> calculateQuarterlyInterestDates(Account account) {
-        List<Calendar> interestDates = new ArrayList<>();
+    protected Map<Calendar, BigDecimal> calculateQuarterlyInterestDates(Account account) {
+        LinkedHashMap<Calendar, BigDecimal> interests = new LinkedHashMap<>();
         Calendar startDate = createCalendar(account.getStartDate());
         Calendar endDate = createCalendar(account.getEndDate());
         Calendar interestDate = (Calendar) startDate.clone();
@@ -74,15 +96,25 @@ public class Investment {
             interestDate.set(Calendar.DAY_OF_MONTH, interestDate.getActualMaximum(Calendar.DAY_OF_MONTH));
             interestDate.add(Calendar.DAY_OF_MONTH, 1);
             if(interestDate.before(endDate)) {
-                interestDates.add((Calendar) interestDate.clone());
+                if(interests.size() == 0) {
+                    long between = ChronoUnit.DAYS.between(startDate.toInstant(), interestDate.toInstant());
+                    // TODO quarter total days calculations
+                    interests.put((Calendar) interestDate.clone(), account.getInterestAmount().divide(new BigDecimal(91), 2, RoundingMode.HALF_UP).multiply(new BigDecimal(between)));
+                } else {
+                    interests.put((Calendar) interestDate.clone(), account.getInterestAmount());
+                }
             }
         }
-        interestDates.add((Calendar) endDate.clone());
-        return interestDates;
+
+        Map.Entry<Calendar, BigDecimal> lastEntry = getLastEntry(interests);
+        long between = ChronoUnit.DAYS.between(lastEntry.getKey().toInstant(), endDate.toInstant());
+        // TODO quarter total days calculations
+        interests.put((Calendar) endDate.clone(), account.getInterestAmount().divide(new BigDecimal(91), 2, RoundingMode.HALF_UP).multiply(new BigDecimal(between)));
+        return interests;
     }
 
-    protected List<Calendar> calculateHalfYearlyInterestDates(Account account) {
-        List<Calendar> interestDates = new ArrayList<>();
+    protected Map<Calendar, BigDecimal> calculateHalfYearlyInterestDates(Account account) {
+        LinkedHashMap<Calendar, BigDecimal> interests = new LinkedHashMap<>();
         Calendar startDate = createCalendar(account.getStartDate());
         Calendar endDate = createCalendar(account.getEndDate());
         Calendar interestDate = (Calendar) startDate.clone();
@@ -92,11 +124,29 @@ public class Investment {
             interestDate.set(Calendar.DAY_OF_MONTH, interestDate.getActualMaximum(Calendar.DAY_OF_MONTH));
             interestDate.add(Calendar.DAY_OF_MONTH, 1);
             if(interestDate.before(endDate)) {
-                interestDates.add((Calendar) interestDate.clone());
+                if(interests.size() == 0) {
+                    long between = ChronoUnit.DAYS.between(startDate.toInstant(), interestDate.toInstant());
+                    // TODO half yearly total days calculations
+                    interests.put((Calendar) interestDate.clone(), account.getInterestAmount().divide(new BigDecimal(183), 2, RoundingMode.HALF_UP).multiply(new BigDecimal(between)));
+                } else {
+                    interests.put((Calendar) interestDate.clone(), account.getInterestAmount());
+                }
             }
         }
-        interestDates.add((Calendar) endDate.clone());
-        return interestDates;
+        Map.Entry<Calendar, BigDecimal> lastEntry = getLastEntry(interests);
+        long between = ChronoUnit.DAYS.between(lastEntry.getKey().toInstant(), endDate.toInstant());
+        // TODO half yearly total days calculations
+        interests.put((Calendar) endDate.clone(), account.getInterestAmount().divide(new BigDecimal(183), 2, RoundingMode.HALF_UP).multiply(new BigDecimal(between)));
+        return interests;
+    }
+
+    private Map.Entry<Calendar, BigDecimal> getLastEntry(LinkedHashMap<Calendar, BigDecimal> interests) {
+        Iterator<Map.Entry<Calendar, BigDecimal>> iterator = interests.entrySet().iterator();
+        Map.Entry<Calendar, BigDecimal> last = null;
+        while (iterator.hasNext()) {
+            last = iterator.next();
+        }
+        return last;
     }
 
     protected Calendar createCalendar(Date startDate) {
